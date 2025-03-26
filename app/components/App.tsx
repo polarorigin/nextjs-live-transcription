@@ -13,15 +13,24 @@ import {
   useMicrophone,
 } from "../context/MicrophoneContextProvider";
 import Visualizer from "./Visualizer";
+import classNames from "classnames";
+
+interface FormFields {
+  notes: string;
+  comments: string;
+  summary: string;
+}
 
 const App: () => JSX.Element = () => {
-  const [caption, setCaption] = useState<string | undefined>(
-    "Powered by Deepgram"
-  );
+  const [fields, setFields] = useState<FormFields>({
+    notes: "",
+    comments: "",
+    summary: "",
+  });
+  const [activeField, setActiveField] = useState<keyof FormFields | null>(null);
   const { connection, connectToDeepgram, connectionState } = useDeepgram();
   const { setupMicrophone, microphone, startMicrophone, microphoneState } =
     useMicrophone();
-  const captionTimeout = useRef<any>();
   const keepAliveInterval = useRef<any>();
 
   useEffect(() => {
@@ -32,7 +41,7 @@ const App: () => JSX.Element = () => {
   useEffect(() => {
     if (microphoneState === MicrophoneState.Ready) {
       connectToDeepgram({
-        model: "nova-3",
+        model: "nova-3-medical",
         interim_results: true,
         smart_format: true,
         filler_words: true,
@@ -55,39 +64,29 @@ const App: () => JSX.Element = () => {
     };
 
     const onTranscript = (data: LiveTranscriptionEvent) => {
-      const { is_final: isFinal, speech_final: speechFinal } = data;
-      let thisCaption = data.channel.alternatives[0].transcript;
-
-      console.log("thisCaption", thisCaption);
-      if (thisCaption !== "") {
-        console.log('thisCaption !== ""', thisCaption);
-        setCaption(thisCaption);
-      }
-
-      if (isFinal && speechFinal) {
-        clearTimeout(captionTimeout.current);
-        captionTimeout.current = setTimeout(() => {
-          setCaption(undefined);
-          clearTimeout(captionTimeout.current);
-        }, 3000);
+      const { is_final: isFinal } = data;
+      const transcript = data.channel.alternatives[0].transcript;
+      
+      if (activeField && transcript && isFinal) {
+        setFields(prev => ({
+          ...prev,
+          [activeField]: prev[activeField] + (prev[activeField] ? ' ' : '') + transcript
+        }));
       }
     };
 
     if (connectionState === LiveConnectionState.OPEN) {
       connection.addListener(LiveTranscriptionEvents.Transcript, onTranscript);
       microphone.addEventListener(MicrophoneEvents.DataAvailable, onData);
-
       startMicrophone();
     }
 
     return () => {
-      // prettier-ignore
       connection.removeListener(LiveTranscriptionEvents.Transcript, onTranscript);
       microphone.removeEventListener(MicrophoneEvents.DataAvailable, onData);
-      clearTimeout(captionTimeout.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connectionState]);
+  }, [connectionState, activeField]);
 
   useEffect(() => {
     if (!connection) return;
@@ -101,32 +100,66 @@ const App: () => JSX.Element = () => {
       keepAliveInterval.current = setInterval(() => {
         connection.keepAlive();
       }, 10000);
-    } else {
-      clearInterval(keepAliveInterval.current);
     }
 
     return () => {
       clearInterval(keepAliveInterval.current);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [microphoneState, connectionState]);
+  }, [connection, connectionState, microphoneState]);
+
+  const handleFieldFocus = (field: keyof FormFields) => {
+    if (microphone && microphoneState === MicrophoneState.Open) {
+      microphone.stop();
+    }
+    setActiveField(field);
+  };
 
   return (
-    <>
-      <div className="flex h-full antialiased">
-        <div className="flex flex-row h-full w-full overflow-x-hidden">
-          <div className="flex flex-col flex-auto h-full">
-            {/* height 100% minus 8rem */}
-            <div className="relative w-full h-full">
-              {microphone && <Visualizer microphone={microphone} />}
-              <div className="absolute bottom-[8rem]  inset-x-0 max-w-4xl mx-auto text-center">
-                {caption && <span className="bg-black/70 p-8">{caption}</span>}
-              </div>
+    <div className="flex min-h-screen flex-col items-center justify-between p-24">
+      <div className="w-full max-w-2xl space-y-6">
+        <h1 className="text-2xl font-bold mb-6">Voice-to-Text Form</h1>
+        
+        <div className="space-y-4">
+          {Object.keys(fields).map((field) => (
+            <div key={field} className="space-y-2">
+              <label className="block text-sm font-medium text-gray-700 capitalize">
+                {field}
+              </label>
+              <textarea
+                value={fields[field as keyof FormFields]}
+                onChange={(e) =>
+                  setFields((prev) => ({
+                    ...prev,
+                    [field]: e.target.value,
+                  }))
+                }
+                onFocus={() => handleFieldFocus(field as keyof FormFields)}
+                className={classNames(
+                  "w-full p-3 border rounded-lg min-h-[100px] transition-all duration-200",
+                  {
+                    "border-blue-500 ring-2 ring-blue-200": activeField === field,
+                    "border-gray-300": activeField !== field,
+                  }
+                )}
+                placeholder={`Click here and start speaking to add ${field}...`}
+              />
             </div>
-          </div>
+          ))}
+        </div>
+
+        <div className="mt-4 text-sm text-gray-500">
+          {activeField ? (
+            <p>Currently transcribing to: <span className="font-medium capitalize">{activeField}</span></p>
+          ) : (
+            <p>Click on a field to start transcribing</p>
+          )}
+        </div>
+
+        <div className="fixed bottom-8 left-1/2 transform -translate-x-1/2">
+          {microphone && <Visualizer microphone={microphone} />}
         </div>
       </div>
-    </>
+    </div>
   );
 };
 
